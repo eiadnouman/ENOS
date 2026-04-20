@@ -2,3 +2,10 @@
 *.bin
 *.iso
 
+
+
+# Added by cargo
+
+/target
+serial.log
+isodir/boot/kernel.bin
