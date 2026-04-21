@@ -22,6 +22,7 @@ pub struct InterruptStackFrame {
 }
 
 pub type HandlerFunc = extern "x86-interrupt" fn(&mut InterruptStackFrame);
+pub type HandlerFuncWithCode = extern "x86-interrupt" fn(&mut InterruptStackFrame, error_code: u32);
 
 impl IdtEntry {
     pub const fn missing() -> Self {
@@ -49,6 +50,12 @@ impl IdtEntry {
         self.type_attr = 0x8E; // Present (1) | DPL (00) | Storage (0) | 32-bit Interrupt Gate (1110)
         self.offset_high = (pointer >> 16) as u16;
     }
+
+    pub fn set_handler_user(&mut self, pointer: u32) {
+        self.set_handler_raw(pointer);
+        // Elevate DPL to 3 so Ring 3 processes can execute int instruction successfully!
+        self.type_attr = 0xEE; // Present (1) | DPL (11) | Storage (0) | 32-bit Interrupt Gate (1110)
+    }
 }
 
 pub struct InterruptDescriptorTable {
@@ -68,6 +75,14 @@ impl InterruptDescriptorTable {
 
     pub fn set_handler_ptr(&mut self, index: usize, pointer: u32) {
         self.entries[index].set_handler_raw(pointer);
+    }
+
+    pub fn set_handler_user(&mut self, index: usize, pointer: u32) {
+        self.entries[index].set_handler_user(pointer);
+    }
+
+    pub fn set_handler_with_code(&mut self, index: usize, handler: HandlerFuncWithCode) {
+        self.entries[index].set_handler_raw(handler as u32);
     }
 
     pub fn load(&'static self) {

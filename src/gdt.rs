@@ -1,4 +1,3 @@
-use core::arch::asm;
 use core::mem::size_of;
 use alloc::boxed::Box;
 
@@ -83,33 +82,38 @@ pub struct GlobalDescriptorTable {
     entries: [GdtEntry; 6],
 }
 
+// Global TSS pointer set during init — used by set_interrupt_stack() called after IDT init.
+static mut TSS_PTR: *mut TaskStateSegment = core::ptr::null_mut();
+
 pub fn init() {
     unsafe {
         // Allocate dynamically on the Global Kernel Heap to bypass static BSS compiler limits!
-        let mut tss_box = Box::new(TaskStateSegment::new());
-        let mut gdt_box = Box::new(GlobalDescriptorTable {
+        let tss_box = Box::new(TaskStateSegment::new());
+        let gdt_box = Box::new(GlobalDescriptorTable {
             entries: [GdtEntry::empty(); 6]
         });
 
-        gdt_box.entries[1] = GdtEntry::new(0, 0xFFFFF, 0x9A, 0xCF); // Kernel Code 0x08
-        gdt_box.entries[2] = GdtEntry::new(0, 0xFFFFF, 0x92, 0xCF); // Kernel Data 0x10
-        gdt_box.entries[3] = GdtEntry::new(0, 0xFFFFF, 0xFA, 0xCF); // User Code 0x1B
-        gdt_box.entries[4] = GdtEntry::new(0, 0xFFFFF, 0xF2, 0xCF); // User Data 0x23
-
-        // Prepare the TSS Descriptor
         let tss_ref = Box::leak(tss_box);
         let gdt_ref = Box::leak(gdt_box);
+
+        // Save global TSS pointer for later esp0 setup
+        TSS_PTR = tss_ref as *mut TaskStateSegment;
+
+        gdt_ref.entries[1] = GdtEntry::new(0, 0xFFFFF, 0x9A, 0xCF); // Kernel Code 0x08
+        gdt_ref.entries[2] = GdtEntry::new(0, 0xFFFFF, 0x92, 0xCF); // Kernel Data 0x10
+        gdt_ref.entries[3] = GdtEntry::new(0, 0xFFFFF, 0xFA, 0xCF); // User Code 0x1B
+        gdt_ref.entries[4] = GdtEntry::new(0, 0xFFFFF, 0xF2, 0xCF); // User Data 0x23
 
         let tss_base = tss_ref as *const _ as u32;
         let tss_limit = size_of::<TaskStateSegment>() as u32 - 1;
         gdt_ref.entries[5] = GdtEntry::new(tss_base, tss_limit, 0x89, 0x40);
 
-        // Set TSS.esp0 to the top of our pre-allocated kernel stack
-        // Extern link to the assembly stack top
-        extern "C" {
-            static kernel_stack_top: u8;
-        }
-        tss_ref.esp0 = &raw const kernel_stack_top as usize as u32;
+        // Debug: dump GDT[2] (Kernel Data 0x10) bytes
+        let gdt2_ptr = &gdt_ref.entries[2] as *const GdtEntry as *const u8;
+        let b = core::slice::from_raw_parts(gdt2_ptr, 8);
+        crate::serial_println!("GDT[2] bytes: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+        crate::serial_println!("GDT base: {:#x}, TSS base: {:#x}", gdt_ref as *const _ as u32, tss_base);
 
         let gdt_ptr = GdtPtr {
             limit: (size_of::<GlobalDescriptorTable>() - 1) as u16,
@@ -119,8 +123,7 @@ pub fn init() {
         // Load GDT
         core::arch::asm!("lgdt [{}]", in(reg) &gdt_ptr, options(readonly, nostack, preserves_flags));
 
-        // Flush Segments (Kernel Code = 0x08, Kernel Data = 0x10)
-        // Note: Assuming CS is already appropriately set by MultiBoot/GRUB
+        // Flush data segment registers to our new GDT (Kernel Data = 0x10)
         core::arch::asm!(
             "mov ax, 0x10",
             "mov ds, ax",
@@ -131,7 +134,32 @@ pub fn init() {
             options(nostack, preserves_flags)
         );
 
+        // Reload CS to 0x08 (Kernel Code) using a far return.
+        // This flushes the hidden CS descriptor cache with our new GDT's entry.
+        core::arch::asm!(
+            "push 0x08",       // Push new CS selector
+            "lea eax, [2f]",   // Push return address (next instruction after retf)
+            "push eax",
+            "retf",            // Far return: pops EIP then CS, reloading CS to 0x08
+            "2:",
+            options(nostack)
+        );
+
         // Load TSS (Offset 0x28)
         core::arch::asm!("ltr ax", in("ax") 0x28u16, options(nostack, preserves_flags));
+    }
+}
+
+/// Called AFTER the IDT is heap-allocated so the interrupt stack doesn't collide with it.
+/// Sets TSS.esp0 to the top of a freshly allocated 8KB Ring 0 stack.
+pub fn set_interrupt_stack() {
+    unsafe {
+        assert!(!TSS_PTR.is_null(), "gdt::init() must be called before set_interrupt_stack()");
+        // Allocate the dedicated Ring 0 interrupt stack (8KB) AFTER IDT is allocated
+        let int_stack: &'static mut [u8; 8192] = Box::leak(Box::new([0u8; 8192]));
+        // Stack grows downward — esp0 points to the TOP (end of the slice)
+        (*TSS_PTR).esp0 = (int_stack.as_ptr() as usize + 8192) as u32;
+        let esp0 = (*TSS_PTR).esp0;
+        crate::serial_println!("GDT: TSS.esp0 set to {:#x} (Ring 0 interrupt stack top)", esp0);
     }
 }

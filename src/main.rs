@@ -20,6 +20,7 @@ mod allocator;
 mod shell;
 mod task;
 mod gdt;
+mod syscall;
 
 // The raw boot sequence. Sets up a strict 16KB stack, pushes the multiboot registers to the C-stack, and jumps to rust.
 global_asm!(r#"
@@ -38,7 +39,7 @@ _start:
 .align 16
 .global kernel_stack_bottom
 kernel_stack_bottom:
-.skip 16384 # 16KB
+.skip 16384 # 16KB boot stack
 .global kernel_stack_top
 kernel_stack_top:
 "#);
@@ -85,12 +86,22 @@ fn background_thread() {
 
 #[no_mangle]
 pub extern "C" fn user_mode_function() {
-    shell::init();
-    crate::println!("CPU Security Ring: 3 (User Mode) Activated.");
-    crate::serial_println!("RING 3 Process Executing.");
+    let msg = "Hello from Ring 3 via strictly isolated SYSCALL 0x80!";
+    let ptr = msg.as_ptr() as u32;
+    let len = msg.len() as u32;
+
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            in("eax") 1,
+            in("ebx") ptr,
+            in("ecx") len,
+            options(nostack, preserves_flags)
+        );
+    }
+
     loop {
-        // We cannot HLT in User mode! So we yield our timeslice implicitly 
-        // by doing busy-work, and the timer preempts us securely!
+        // We cannot HLT in User mode safely! So we just do busy-work and get preempted by the timer!
         for _ in 0..10000 {}
     }
 }
@@ -109,7 +120,7 @@ switch_to_user_mode:
     mov eax, esp
     push 0x23
     push eax
-    push 0x3202    # EFLAGS with IOPL = 3 (bits 12-13) + Interrupts Enabled (bit 9) + Reserved (bit 1)
+    push 0x202     # EFLAGS with IOPL = 0 (bits 12-13) + Interrupts Enabled (bit 9)
     push 0x1B
     
     mov eax, offset user_mode_function
@@ -146,6 +157,9 @@ pub extern "C" fn kernel_main(magic: u32, info_addr: u32) -> ! {
     // 3. Connect Exception Gates
     interrupts::init_idt();
     pic::PICS.lock().initialize();
+    // IMPORTANT: set_interrupt_stack() must be called AFTER init_idt() so the
+    // TSS esp0 stack is allocated after the IDT in the heap, preventing collision.
+    gdt::set_interrupt_stack();
     crate::serial_println!("Kernel Boot: Interrupts Ready.");
     
     // 4. Wire Multitasking Scheduler

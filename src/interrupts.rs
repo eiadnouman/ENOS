@@ -1,23 +1,39 @@
-use crate::idt::InterruptDescriptorTable;
-use lazy_static::lazy_static;
+use crate::idt::{InterruptDescriptorTable, HandlerFuncWithCode};
+use alloc::boxed::Box;
 
-lazy_static! {
-    static ref IDT: InterruptDescriptorTable = {
+pub fn init_idt() {
+    let cs: u16;
+    unsafe { core::arch::asm!("mov {0:x}, cs", out(reg) cs); }
+    crate::serial_println!("IDT init: CS = {:#x}", cs);
+
+    // Heap-allocate the IDT so it doesn't conflict with BSS symbols like kernel_stack_top.
+    // lazy_static! uses a spin::Once in BSS which was ending up at the same address as
+    // our kernel stack top, causing the CPU to corrupt the IDT on every privilege transition.
+    let idt = Box::leak(Box::new({
         let mut idt = InterruptDescriptorTable::new();
         idt.set_handler(3, breakpoint_handler);
         idt.set_handler_ptr(32, timer_interrupt_wrapper as usize as u32);
         idt.set_handler(33, keyboard_interrupt_handler);
+        idt.set_handler_user(0x80, syscall_wrapper as usize as u32);
+        idt.set_handler_with_code(13, gpf_handler);
+        idt.set_handler_with_code(8, double_fault_handler);
         idt
-    };
-}
-
-pub fn init_idt() {
-    IDT.load();
+    }));
+    idt.load();
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: &mut crate::idt::InterruptStackFrame) {
-    crate::println!("EXCEPTION: BREAKPOINT\n{:#?}", frame);
     crate::serial_println!("EXCEPTION: BREAKPOINT\n{:#?}", frame);
+}
+
+extern "x86-interrupt" fn gpf_handler(frame: &mut crate::idt::InterruptStackFrame, error_code: u32) {
+    crate::serial_println!("EXCEPTION: General Protection Fault! ErrCode={:#x}\n{:#?}", error_code, frame);
+    loop {}
+}
+
+extern "x86-interrupt" fn double_fault_handler(frame: &mut crate::idt::InterruptStackFrame, error_code: u32) {
+    crate::serial_println!("EXCEPTION: Double Fault! ErrCode={:#x}\n{:#?}", error_code, frame);
+    loop {}
 }
 
 use core::arch::global_asm;
@@ -36,15 +52,41 @@ timer_interrupt_wrapper:
 
     popad
     iretd
+
+.global syscall_wrapper
+syscall_wrapper:
+    pushad
+
+    # cdecl: push args right-to-left: fn(eax, ebx, ecx, edx, esi, edi)
+    push edi
+    push esi
+    push edx
+    push ecx
+    push ebx
+    push eax
+
+    call syscall_dispatcher
+
+    # Cleanup 6 x 4 bytes = 24 bytes of args
+    add esp, 24
+
+    # Save return value (eax) into the pushad-saved eax slot
+    # pushad layout (top of stack = lowest address): edi esi ebp esp ebx edx ecx eax
+    # eax is at [esp+28]
+    mov [esp + 28], eax
+
+    popad
+    iretd
 "#);
 
 extern "C" {
     fn timer_interrupt_wrapper();
+    fn syscall_wrapper();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_frame: &mut crate::idt::InterruptStackFrame) {
-    let mut port = 0x60;
-    let mut scancode: u8;
+    let port: u16 = 0x60;
+    let scancode: u8;
     unsafe {
         core::arch::asm!(
             "in al, dx",
@@ -53,9 +95,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_frame: &mut crate::idt::In
             options(nomem, nostack, preserves_flags)
         );
     }
-    
-    crate::shell::process_scancode(scancode);
 
+    crate::shell::process_scancode(scancode);
 
     crate::pic::ack(33);
 }
