@@ -15,11 +15,19 @@ pub struct SimpleAllocator {
     offset: Mutex<usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct HeapStats {
+    pub used_bytes: usize,
+    pub free_bytes: usize,
+    pub total_bytes: usize,
+    pub used_percent: usize,
+}
+
 unsafe impl GlobalAlloc for SimpleAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut offset = self.offset.lock();
-        
-        let alloc_start = (HEAP_MEM.data.as_ptr() as usize) + *offset;
+        let heap_base = core::ptr::addr_of_mut!(HEAP_MEM.data) as *mut u8 as usize;
+        let alloc_start = heap_base + *offset;
         
         // Align up
         let align = layout.align();
@@ -34,11 +42,11 @@ unsafe impl GlobalAlloc for SimpleAllocator {
         
         match alloc_end {
             Some(end) => {
-                let heap_end = HEAP_MEM.data.as_ptr() as usize + HEAP_SIZE;
+                let heap_end = heap_base + HEAP_SIZE;
                 if end > heap_end {
                     null_mut() // Out of heap memory!
                 } else {
-                    let new_offset = end - (HEAP_MEM.data.as_ptr() as usize);
+                    let new_offset = end - heap_base;
                     *offset = new_offset;
                     start_addr as *mut u8
                 }
@@ -58,3 +66,21 @@ unsafe impl GlobalAlloc for SimpleAllocator {
 pub static ALLOCATOR: SimpleAllocator = SimpleAllocator {
     offset: Mutex::new(0),
 };
+
+pub fn heap_stats() -> HeapStats {
+    let used = *ALLOCATOR.offset.lock();
+    let clamped_used = core::cmp::min(used, HEAP_SIZE);
+    let free = HEAP_SIZE.saturating_sub(clamped_used);
+    let used_percent = if HEAP_SIZE == 0 {
+        0
+    } else {
+        (clamped_used.saturating_mul(100)) / HEAP_SIZE
+    };
+
+    HeapStats {
+        used_bytes: clamped_used,
+        free_bytes: free,
+        total_bytes: HEAP_SIZE,
+        used_percent,
+    }
+}

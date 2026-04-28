@@ -129,8 +129,6 @@ impl BumpAllocator {
     }
 
     pub fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let mmap_end = self.memory_map_addr + self.memory_map_length;
-
         while self.current_mmap_offset < self.memory_map_length {
             let mmap = self.memory_map_addr + self.current_mmap_offset;
             let entry = unsafe { &*(mmap as *const MemoryMapEntry) };
@@ -185,4 +183,3 @@ impl BumpAllocator {
         None // Out of memory!
     }
 }
-

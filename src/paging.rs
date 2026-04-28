@@ -24,13 +24,14 @@ pub fn init() {
         // Prepare Page Table 0 (maps 0x0 to 0x3FFFFF - first 4MB)
         for i in 0..1024 {
             let phys_addr = (i * 4096) as u32;
-            // Map as Present + Read/Write + User
-            PAGE_TABLE_0.entries[i] = phys_addr | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+            // Kernel space: supervisor-only mappings.
+            PAGE_TABLE_0.entries[i] = phys_addr | PAGE_PRESENT | PAGE_RW;
         }
 
         // Prepare Page Table 1 (maps 0x400000 to 0x7FFFFF - second 4MB)
         for i in 0..1024 {
             let phys_addr = 0x400000 + (i * 4096) as u32;
+            // User space: explicitly user-accessible.
             PAGE_TABLE_1.entries[i] = phys_addr | PAGE_PRESENT | PAGE_RW | PAGE_USER;
         }
 
@@ -38,11 +39,11 @@ pub fn init() {
         let pt0_phys = (&raw const PAGE_TABLE_0 as *const _ as u32) - super::memory::PAGE_SIZE * 0; // It's all physical for now
         let pt1_phys = (&raw const PAGE_TABLE_1 as *const _ as u32) - super::memory::PAGE_SIZE * 0;
 
-        PAGE_DIRECTORY.entries[0] = pt0_phys | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+        PAGE_DIRECTORY.entries[0] = pt0_phys | PAGE_PRESENT | PAGE_RW;
         PAGE_DIRECTORY.entries[1] = pt1_phys | PAGE_PRESENT | PAGE_RW | PAGE_USER;
 
         // Load Page Directory to CR3
-        let pd_addr = &PAGE_DIRECTORY as *const _ as u32;
+        let pd_addr = &raw const PAGE_DIRECTORY as *const _ as u32;
         asm!("mov cr3, {}", in(reg) pd_addr, options(nostack, preserves_flags));
 
         // Enable Paging in CR0 (Bit 31)

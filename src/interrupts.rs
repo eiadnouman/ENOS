@@ -1,4 +1,4 @@
-use crate::idt::{InterruptDescriptorTable, HandlerFuncWithCode};
+use crate::idt::InterruptDescriptorTable;
 use alloc::boxed::Box;
 
 pub fn init_idt() {
@@ -12,9 +12,10 @@ pub fn init_idt() {
     let idt = Box::leak(Box::new({
         let mut idt = InterruptDescriptorTable::new();
         idt.set_handler(3, breakpoint_handler);
-        idt.set_handler_ptr(32, timer_interrupt_wrapper as usize as u32);
+        idt.set_handler_ptr(32, timer_interrupt_wrapper as *const () as usize as u32);
         idt.set_handler(33, keyboard_interrupt_handler);
-        idt.set_handler_user(0x80, syscall_wrapper as usize as u32);
+        idt.set_handler_ptr(14, page_fault_wrapper as *const () as usize as u32);
+        idt.set_handler_user(0x80, syscall_wrapper as *const () as usize as u32);
         idt.set_handler_with_code(13, gpf_handler);
         idt.set_handler_with_code(8, double_fault_handler);
         idt
@@ -36,6 +37,32 @@ extern "x86-interrupt" fn double_fault_handler(frame: &mut crate::idt::Interrupt
     loop {}
 }
 
+#[no_mangle]
+pub extern "C" fn page_fault_dispatcher(current_esp: u32, fault_addr: u32, error_code: u32) -> u32 {
+    let user_fault = (error_code & 0x4) != 0;
+    let write_fault = (error_code & 0x2) != 0;
+    let protection_violation = (error_code & 0x1) != 0;
+
+    if user_fault {
+        crate::serial_println!(
+            "EXCEPTION: USER PAGE FAULT addr={:#x} err={:#x} kind={} access={}",
+            fault_addr,
+            error_code,
+            if protection_violation { "protection" } else { "not-present" },
+            if write_fault { "write" } else { "read" },
+        );
+        return crate::task::terminate_current_user_task_from_fault(current_esp);
+    }
+
+    panic!(
+        "KERNEL PAGE FAULT addr={:#x} err={:#x} kind={} access={}",
+        fault_addr,
+        error_code,
+        if protection_violation { "protection" } else { "not-present" },
+        if write_fault { "write" } else { "read" },
+    );
+}
+
 use core::arch::global_asm;
 
 global_asm!(r#"
@@ -47,17 +74,31 @@ timer_interrupt_wrapper:
     add esp, 4
     mov esp, eax
 
-    mov al, 0x20
-    out 0x20, al
+    popad
+    iretd
 
+.global page_fault_wrapper
+page_fault_wrapper:
+    pushad
+    mov ebx, esp
+    mov eax, cr2
+    mov ecx, [ebx + 32]
+    push ecx
+    push eax
+    push ebx
+    call page_fault_dispatcher
+    add esp, 12
+    mov esp, eax
     popad
     iretd
 
 .global syscall_wrapper
 syscall_wrapper:
     pushad
+    mov ebp, esp
 
-    # cdecl: push args right-to-left: fn(eax, ebx, ecx, edx, esi, edi)
+    # cdecl: push args right-to-left: fn(eax, ebx, ecx, edx, esi, edi, current_esp)
+    push ebp
     push edi
     push esi
     push edx
@@ -67,8 +108,8 @@ syscall_wrapper:
 
     call syscall_dispatcher
 
-    # Cleanup 6 x 4 bytes = 24 bytes of args
-    add esp, 24
+    # Cleanup 7 x 4 bytes = 28 bytes of args
+    add esp, 28
 
     # Save return value (eax) into the pushad-saved eax slot
     # pushad layout (top of stack = lowest address): edi esi ebp esp ebx edx ecx eax
@@ -81,6 +122,7 @@ syscall_wrapper:
 
 extern "C" {
     fn timer_interrupt_wrapper();
+    fn page_fault_wrapper();
     fn syscall_wrapper();
 }
 

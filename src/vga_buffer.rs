@@ -140,6 +140,14 @@ lazy_static! {
     });
 }
 
+pub fn clear_screen() {
+    let mut writer = WRITER.lock();
+    for row in 0..BUFFER_HEIGHT {
+        writer.clear_row(row);
+    }
+    writer.column_position = 0;
+}
+
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*)));
