@@ -454,29 +454,72 @@ impl TaskManager {
 
 pub static SCHEDULER: Mutex<TaskManager> = Mutex::new(TaskManager::new());
 
+// ── Interrupt-safe guard ────────────────────────────────────────────────────
+// Public scheduler functions that are called from ordinary thread context
+// (e.g. shell commands running inside background_thread) must disable
+// interrupts while holding the SCHEDULER lock.  Without this, the PIT timer
+// IRQ can fire in the middle of the lock, call scheduler_tick(), and try to
+// take the same lock → infinite spin → kernel hang.
+//
+// We save/restore EFLAGS so that nested calls (or calls from already-disabled
+// contexts) work correctly.
+
+/// Run `f` with hardware interrupts disabled, then restore the previous
+/// interrupt-enable state from EFLAGS.IF.
+#[inline]
+fn with_interrupts_disabled<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let flags: u32;
+    unsafe {
+        // Save EFLAGS and disable interrupts atomically.
+        core::arch::asm!(
+            "pushfd",
+            "pop {0}",
+            "cli",
+            out(reg) flags,
+            options(nomem, preserves_flags)
+        );
+    }
+    let result = f();
+    unsafe {
+        // Restore the interrupt-enable bit from the saved flags.
+        if flags & 0x0200 != 0 {
+            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+        }
+    }
+    result
+}
+
+// ── Public API (all safe to call from thread context) ───────────────────────
+
 pub fn scheduler_stats() -> SchedulerStats {
-    SCHEDULER.lock().stats()
+    with_interrupts_disabled(|| SCHEDULER.lock().stats())
 }
 
 pub fn scheduler_process_snapshot() -> Vec<ProcessSnapshot> {
-    SCHEDULER.lock().process_snapshot()
+    with_interrupts_disabled(|| SCHEDULER.lock().process_snapshot())
 }
 
+/// Only called from the syscall handler (already in interrupt context, IF=0).
 pub fn sleep_current_task(current_esp: u32, ticks: u32) -> bool {
     SCHEDULER.lock().sleep_current_task(current_esp, ticks)
 }
 
+/// Called from the shell (thread context) — must guard against timer IRQ.
 pub fn kill_task(pid: usize) -> Result<KillTaskResult, &'static str> {
-    SCHEDULER.lock().kill_task_by_pid(pid)
+    with_interrupts_disabled(|| SCHEDULER.lock().kill_task_by_pid(pid))
 }
 
 pub fn terminate_current_user_task_from_fault(current_esp: u32) -> u32 {
+    // Called from the page-fault handler (already in interrupt context).
     SCHEDULER
         .lock()
         .terminate_current_user_task_from_fault(current_esp)
 }
 
-// Invoked directly from the assembly timer interrupt wrapper.
+// ── Timer IRQ entry-point (called from assembly, interrupts already off) ────
 #[no_mangle]
 pub extern "C" fn scheduler_tick(esp: u32) -> u32 {
     crate::pic::ack(32);
