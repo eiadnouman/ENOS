@@ -488,30 +488,15 @@ fn format_duration_from_ticks(ticks: u64) -> (u64, u64, u64, u64) {
 
 fn format_bytes(bytes: usize) -> String {
     if bytes >= 1024 * 1024 {
-        let mb = bytes / (1024 * 1024);
+        let mb  = bytes / (1024 * 1024);
         let rem = (bytes % (1024 * 1024)) / (1024 * 10);
-        let mut out = String::from("");
-        out.push_str("~");
-        out.push_str(&mb.to_string());
-        out.push('.');
-        out.push_str(&rem.to_string());
-        out.push_str(" MB");
-        out
+        alloc::format!("~{}.{} MB", mb, rem)
     } else if bytes >= 1024 {
-        let kb = bytes / 1024;
+        let kb  = bytes / 1024;
         let rem = (bytes % 1024) * 10 / 1024;
-        let mut out = String::from("");
-        out.push_str("~");
-        out.push_str(&kb.to_string());
-        out.push('.');
-        out.push_str(&rem.to_string());
-        out.push_str(" KB");
-        out
+        alloc::format!("~{}.{} KB", kb, rem)
     } else {
-        let mut out = String::from("");
-        out.push_str(&bytes.to_string());
-        out.push_str(" B");
-        out
+        alloc::format!("{} B", bytes)
     }
 }
 
@@ -976,29 +961,29 @@ pub fn evaluate_command() {
     let command = command_line.split_whitespace().next().unwrap_or("");
 
     match command {
-        "clear" => crate::vga_buffer::clear_screen(),
-        "echo" => command_echo(&command_line),
-        "calc" => command_calc(&command_line),
-        "help" => show_help(),
+        "clear"  => crate::vga_buffer::clear_screen(),
+        "echo"   => command_echo(command_line.as_str()),
+        "calc"   => command_calc(command_line.as_str()),
+        "help"   => show_help(),
         "uptime" => command_uptime(),
-        "ps" => command_ps(),
-        "top" => command_top(),
-        "tasks" => command_tasks(),
-        "meminfo" => command_meminfo(),
+        "ps"     => command_ps(),
+        "top"    => command_top(),
+        "tasks"  => command_tasks(),
+        "meminfo"=> command_meminfo(),
         "whoami" => command_whoami(),
-        "id" => command_id(),
-        "login" => command_login(&command_line),
-        "su" => command_login(&command_line),
+        "id"     => command_id(),
+        "login"  => command_login(command_line.as_str()),
+        "su"     => command_login(command_line.as_str()),
         "logout" => command_logout(),
-        "kill" => command_kill(&command_line),
-        "touch" => command_touch(&command_line),
-        "rm" => command_rm(&command_line),
-        "ls" => command_ls(),
-        "write" => command_write(&command_line),
-        "cat" => command_cat(&command_line),
+        "kill"   => command_kill(command_line.as_str()),
+        "touch"  => command_touch(command_line.as_str()),
+        "rm"     => command_rm(command_line.as_str()),
+        "ls"     => command_ls(),
+        "write"  => command_write(command_line.as_str()),
+        "cat"    => command_cat(command_line.as_str()),
         "fsinfo" => command_fsinfo(),
-        "about" => command_about(),
-        _ => crate::println!("Error: command not found: {}", command_line),
+        "about"  => command_about(),
+        _        => crate::println!("Error: command not found: {}", command_line),
     }
 
     print_prompt();
