@@ -1,32 +1,47 @@
 {
-    // ── Rust Analyzer ──────────────────────────────────────────────────────────
-    // Tell rust-analyzer to use the same nightly toolchain used by cargo build.
-    "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
-    "rust-analyzer.cargo.extraArgs": ["+nightly"],
+    // ══════════════════════════════════════════════════════════════════════════
+    // Rust Analyzer configuration for ENOS — a bare-metal no_std Rust kernel.
+    //
+    // The project builds against a custom JSON target (i686-enos.json) using
+    // nightly + build-std.  Without this config, rust-analyzer falls back to
+    // the host target and cannot resolve `core` / `alloc`, producing ~17 false
+    // "unresolved import" / "cannot find type" errors in every source file.
+    // ══════════════════════════════════════════════════════════════════════════
 
-    // Pass the same unstable flags that .cargo/config.toml sets, so
-    // rust-analyzer can resolve core / alloc / compiler_builtins.
-    "rust-analyzer.cargo.extraEnv": {},
-    "rust-analyzer.cargo.target": "i686-enos.json",
-    "rust-analyzer.cargo.features": "all",
-
-    // build-std is an unstable feature; pass it via the check command.
+    // 1. Tell RA to call cargo with the same flags our build uses.
+    //    "--message-format=json" is required by RA to parse diagnostics.
     "rust-analyzer.check.overrideCommand": [
-        "cargo",
-        "+nightly",
-        "check",
+        "cargo", "+nightly", "check",
         "--message-format=json",
         "-Z", "build-std=core,compiler_builtins,alloc",
         "-Z", "json-target-spec",
         "--target", "i686-enos.json"
     ],
 
-    // Ensure rust-analyzer uses nightly for proc-macro expansion too.
-    "rust-analyzer.rustc.source": "discover",
+    // 2. Also tell RA which target to use for its internal analysis engine.
+    //    RA does not support .json target specs natively; the closest standard
+    //    target is i686-unknown-none (32-bit, no OS, no std).  This silences
+    //    most false positives while the check.overrideCommand provides the
+    //    real diagnostics.
+    "rust-analyzer.cargo.target": "i686-unknown-none",
 
-    // ── Editor ─────────────────────────────────────────────────────────────────
-    // Suppress the old C/C++ gcc task that was left over from the C prototype.
-    "[c]": {
-        "editor.defaultFormatter": null
-    }
+    // 3. Pass nightly to every cargo invocation RA makes internally.
+    "rust-analyzer.cargo.extraArgs": ["+nightly"],
+
+    // 4. build-std must be listed so RA knows to look for sysroot sources.
+    "rust-analyzer.cargo.sysroot": "discover",
+
+    // 5. Suppress warnings that only appear on x86_64 hosts but are
+    //    harmless on the real i686 target (asm register-size mismatch).
+    "rust-analyzer.diagnostics.disabled": [
+        "asm_sub_register",
+        "unresolved-extern-crate"
+    ],
+
+    // 6. Enable useful inlay hints.
+    "rust-analyzer.inlayHints.parameterHints.enable": true,
+    "rust-analyzer.inlayHints.typeHints.enable": true,
+
+    // ── Editor ────────────────────────────────────────────────────────────────
+    "[c]": { "editor.defaultFormatter": null }
 }
