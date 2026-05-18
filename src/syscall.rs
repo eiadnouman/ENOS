@@ -38,7 +38,9 @@ pub extern "C" fn syscall_dispatcher(
 
             let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
             if let Ok(s) = core::str::from_utf8(slice) {
-                crate::serial_println!("[Syscall] {}", s);
+                // Print to both VGA screen and serial debug port.
+                crate::println!("[Ring 3] {}", s);
+                crate::serial_println!("[Syscall SYS_PRINT] {}", s);
                 0 // Success
             } else {
                 ERR_INVALID_UTF8

@@ -99,7 +99,9 @@ extern "C" {
 pub struct BumpAllocator {
     memory_map_addr: u32,
     memory_map_length: u32,
-    next_free_frame: u32,
+    // Option<u32> so we can distinguish "not yet initialised for this
+    // region" from the valid physical address 0x0.
+    next_free_frame: Option<u32>,
     current_mmap_offset: u32,
 }
 
@@ -109,7 +111,7 @@ impl BumpAllocator {
         let mut allocator = BumpAllocator {
             memory_map_addr: 0,
             memory_map_length: 0,
-            next_free_frame: 0,
+            next_free_frame: None,
             current_mmap_offset: 0,
         };
 
@@ -145,7 +147,7 @@ impl BumpAllocator {
 
             if !entry.is_available() {
                 self.current_mmap_offset += entry.size + 4;
-                self.next_free_frame = 0;
+                self.next_free_frame = None;
                 continue;
             }
 
@@ -158,47 +160,44 @@ impl BumpAllocator {
 
             if allocation_floor >= region_end || allocation_floor > u32::MAX as u64 {
                 self.current_mmap_offset += entry.size + 4;
-                self.next_free_frame = 0;
+                self.next_free_frame = None;
                 continue;
             }
 
-            // Init next_free_frame for this region if it's 0.
-            if self.next_free_frame == 0 {
-                self.next_free_frame =
-                    Self::align_up(allocation_floor, PAGE_SIZE as u64) as u32;
+            // Initialise next_free_frame for this region on first visit.
+            if self.next_free_frame.is_none() {
+                self.next_free_frame = Some(
+                    Self::align_up(allocation_floor, PAGE_SIZE as u64) as u32,
+                );
             }
 
-            // Check if we hit the kernel bounds
-            let kernel_start = Self::kernel_start();
-            let kernel_end = Self::kernel_end();
+            let mut candidate = self.next_free_frame.unwrap();
 
-            // Align kernel end to next page boundary
+            // Skip over the kernel image if it sits in this region.
+            let kernel_start = Self::kernel_start();
+            let kernel_end   = Self::kernel_end();
             let kernel_end_aligned = if kernel_end % PAGE_SIZE == 0 {
                 kernel_end
             } else {
                 kernel_end - (kernel_end % PAGE_SIZE) + PAGE_SIZE
             };
 
-            let frame_end_candidate = self.next_free_frame.saturating_add(PAGE_SIZE);
-
-            // If the next_free_frame overlaps the kernel image, jump over it.
-            if self.next_free_frame < kernel_end_aligned && frame_end_candidate > kernel_start {
-                self.next_free_frame = kernel_end_aligned;
+            let candidate_end = candidate.saturating_add(PAGE_SIZE);
+            if candidate < kernel_end_aligned && candidate_end > kernel_start {
+                candidate = kernel_end_aligned;
+                self.next_free_frame = Some(candidate);
             }
 
-            let frame_end = self.next_free_frame.saturating_add(PAGE_SIZE);
-            
-            // Check if this region actually has enough space left for the frame
-            if (frame_end as u64) <= region_end && frame_end > self.next_free_frame {
-                let frame = PhysFrame {
-                    start_address: self.next_free_frame,
-                };
-                self.next_free_frame += PAGE_SIZE;
+            let frame_end = candidate.saturating_add(PAGE_SIZE);
+
+            if (frame_end as u64) <= region_end && frame_end > candidate {
+                let frame = PhysFrame { start_address: candidate };
+                self.next_free_frame = Some(candidate + PAGE_SIZE);
                 return Some(frame);
             } else {
-                // Not enough space in this region. Move to the next region.
+                // Region exhausted — move on.
                 self.current_mmap_offset += entry.size + 4;
-                self.next_free_frame = 0;
+                self.next_free_frame = None;
             }
         }
         None // Out of memory!

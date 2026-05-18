@@ -285,11 +285,14 @@ pub fn poll_input() {
 
 pub fn push_char(c: char) {
     if c == '\u{08}' {
-        // Backspace
+        // Backspace — reset history BEFORE locking the input buffer to
+        // avoid holding two locks at once (deadlock risk with IRQ path).
         HISTORY.lock().reset_navigation();
-        let mut buffer = INPUT_BUFFER.lock();
-        if !buffer.is_empty() {
-            buffer.pop();
+        let popped = {
+            let mut buffer = INPUT_BUFFER.lock();
+            if !buffer.is_empty() { buffer.pop(); true } else { false }
+        };
+        if popped {
             crate::print!("{}", c);
         }
         return;
@@ -301,10 +304,17 @@ pub fn push_char(c: char) {
         return;
     }
 
-    let mut buffer = INPUT_BUFFER.lock();
-    if buffer.len() < MAX_INPUT_LEN {
+    // Check length, push, and reset history — all without holding two
+    // spin-locks simultaneously.
+    let should_push = {
+        let buffer = INPUT_BUFFER.lock();
+        buffer.len() < MAX_INPUT_LEN
+    };
+    if should_push {
+        // Reset history first (acquires + releases HISTORY lock).
         HISTORY.lock().reset_navigation();
-        buffer.push(c);
+        // Now push into the input buffer (acquires + releases INPUT_BUFFER lock).
+        INPUT_BUFFER.lock().push(c);
         crate::print!("{}", c);
     }
 }
