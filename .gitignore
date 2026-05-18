@@ -3,7 +3,6 @@
 *.iso
 *.log
 *.db
-.codex
 
 # Added by cargo
 /target

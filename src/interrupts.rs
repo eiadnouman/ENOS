@@ -11,6 +11,14 @@ pub fn init_idt() {
     // our kernel stack top, causing the CPU to corrupt the IDT on every privilege transition.
     let idt = Box::leak(Box::new({
         let mut idt = InterruptDescriptorTable::new();
+        for vector in 0..32 {
+            if exception_has_error_code(vector) {
+                idt.set_handler_with_code(vector, default_exception_with_code_handler);
+            } else {
+                idt.set_handler(vector, default_exception_handler);
+            }
+        }
+
         idt.set_handler(3, breakpoint_handler);
         idt.set_handler_ptr(32, timer_interrupt_wrapper as *const () as usize as u32);
         idt.set_handler(33, keyboard_interrupt_handler);
@@ -21,6 +29,27 @@ pub fn init_idt() {
         idt
     }));
     idt.load();
+}
+
+fn exception_has_error_code(vector: usize) -> bool {
+    matches!(vector, 8 | 10 | 11 | 12 | 13 | 14 | 17 | 21 | 29 | 30)
+}
+
+extern "x86-interrupt" fn default_exception_handler(frame: &mut crate::idt::InterruptStackFrame) {
+    crate::serial_println!("EXCEPTION: Unhandled CPU exception\n{:#?}", frame);
+    loop {}
+}
+
+extern "x86-interrupt" fn default_exception_with_code_handler(
+    frame: &mut crate::idt::InterruptStackFrame,
+    error_code: u32,
+) {
+    crate::serial_println!(
+        "EXCEPTION: Unhandled CPU exception with error code {:#x}\n{:#?}",
+        error_code,
+        frame
+    );
+    loop {}
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: &mut crate::idt::InterruptStackFrame) {
@@ -138,7 +167,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_frame: &mut crate::idt::In
         );
     }
 
-    crate::shell::process_scancode(scancode);
+    crate::shell::enqueue_scancode_from_irq(scancode);
 
     crate::pic::ack(33);
 }

@@ -80,6 +80,7 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
 fn background_thread() {
     let mut heartbeat: u32 = 0;
     loop {
+        shell::poll_input();
         heartbeat = heartbeat.wrapping_add(1);
 
         // Log occasionally without burning CPU on a busy loop.
@@ -93,9 +94,9 @@ fn background_thread() {
     }
 }
 
-const USER_CODE_ADDR: u32 = 0x0040_0000;
-const USER_MSG_ADDR: u32 = 0x0040_0100;
-const USER_STACK_TOP: u32 = 0x0080_0000;
+const USER_CODE_ADDR: u32 = paging::USER_SPACE_START;
+const USER_MSG_ADDR: u32 = paging::USER_SPACE_START + 0x100;
+const USER_STACK_TOP: u32 = paging::USER_STACK_TOP;
 
 fn write_u32_le(buf: &mut [u8], offset: usize, value: u32) {
     buf[offset] = (value & 0xFF) as u8;

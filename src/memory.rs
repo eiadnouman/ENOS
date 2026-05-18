@@ -84,6 +84,7 @@ pub fn print_memory_map(info_addr: u32) {
 }
 
 pub const PAGE_SIZE: u32 = 4096;
+pub const LOW_MEMORY_RESERVED_END: u32 = 0x0010_0000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PhysFrame {
@@ -128,6 +129,15 @@ impl BumpAllocator {
         unsafe { &_kernel_end as *const _ as u32 }
     }
 
+    fn align_up(value: u64, align: u64) -> u64 {
+        let remainder = value % align;
+        if remainder == 0 {
+            value
+        } else {
+            value + align - remainder
+        }
+    }
+
     pub fn allocate_frame(&mut self) -> Option<PhysFrame> {
         while self.current_mmap_offset < self.memory_map_length {
             let mmap = self.memory_map_addr + self.current_mmap_offset;
@@ -139,12 +149,23 @@ impl BumpAllocator {
                 continue;
             }
 
-            // Init next_free_frame for this region if it's 0
+            let region_start =
+                (entry.base_addr_low as u64) | ((entry.base_addr_high as u64) << 32);
+            let region_length = (entry.length_low as u64) | ((entry.length_high as u64) << 32);
+            let region_end = region_start.saturating_add(region_length);
+            let allocation_floor =
+                core::cmp::max(region_start, LOW_MEMORY_RESERVED_END as u64);
+
+            if allocation_floor >= region_end || allocation_floor > u32::MAX as u64 {
+                self.current_mmap_offset += entry.size + 4;
+                self.next_free_frame = 0;
+                continue;
+            }
+
+            // Init next_free_frame for this region if it's 0.
             if self.next_free_frame == 0 {
-                // Find a proper page-aligned starting address
-                let base = entry.base_addr_low;
-                let remainder = base % PAGE_SIZE;
-                self.next_free_frame = if remainder == 0 { base } else { base - remainder + PAGE_SIZE };
+                self.next_free_frame =
+                    Self::align_up(allocation_floor, PAGE_SIZE as u64) as u32;
             }
 
             // Check if we hit the kernel bounds
@@ -158,17 +179,17 @@ impl BumpAllocator {
                 kernel_end - (kernel_end % PAGE_SIZE) + PAGE_SIZE
             };
 
-            // If the next_free_frame is overlapping the kernel, jump over the kernel!
-            if self.next_free_frame >= kernel_start && self.next_free_frame < kernel_end_aligned {
+            let frame_end_candidate = self.next_free_frame.saturating_add(PAGE_SIZE);
+
+            // If the next_free_frame overlaps the kernel image, jump over it.
+            if self.next_free_frame < kernel_end_aligned && frame_end_candidate > kernel_start {
                 self.next_free_frame = kernel_end_aligned;
             }
 
-            let frame_end = self.next_free_frame + PAGE_SIZE;
+            let frame_end = self.next_free_frame.saturating_add(PAGE_SIZE);
             
             // Check if this region actually has enough space left for the frame
-            let region_end = entry.base_addr_low + entry.length_low;
-            if frame_end <= region_end {
-                // Beautiful! We have space!
+            if (frame_end as u64) <= region_end && frame_end > self.next_free_frame {
                 let frame = PhysFrame {
                     start_address: self.next_free_frame,
                 };

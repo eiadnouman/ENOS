@@ -1,5 +1,3 @@
-const USER_PTR_MIN: u32 = 0x0040_0000;
-const USER_PTR_MAX_EXCLUSIVE: u32 = 0x0080_0000;
 const MAX_PRINT_LEN: usize = 1024;
 
 const ERR_INVALID_POINTER: u32 = 1;
@@ -13,16 +11,7 @@ fn validate_user_buffer(ptr: u32, len: usize) -> Result<(*const u8, usize), u32>
         return Err(ERR_INVALID_LENGTH);
     }
 
-    if ptr < USER_PTR_MIN {
-        return Err(ERR_INVALID_POINTER);
-    }
-
-    let end = match ptr.checked_add(len as u32) {
-        Some(v) => v,
-        None => return Err(ERR_INVALID_POINTER),
-    };
-
-    if end > USER_PTR_MAX_EXCLUSIVE || end <= ptr {
+    if !crate::paging::user_range_contains(ptr, len) {
         return Err(ERR_INVALID_POINTER);
     }
 

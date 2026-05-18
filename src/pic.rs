@@ -17,17 +17,6 @@ unsafe fn outb(port: u16, value: u8) {
     );
 }
 
-unsafe fn inb(port: u16) -> u8 {
-    let mut ret: u8;
-    core::arch::asm!(
-        "in al, dx",
-        out("al") ret,
-        in("dx") port,
-        options(nomem, nostack, preserves_flags)
-    );
-    ret
-}
-
 unsafe fn iowait() {
     outb(0x80, 0);
 }
@@ -44,9 +33,6 @@ impl ChainedPics {
 
     pub fn initialize(&mut self) {
         unsafe {
-            let a1 = inb(PIC1_DATA);
-            let a2 = inb(PIC2_DATA);
-
             outb(PIC1_CMD, 0x11); // start init sequence
             iowait();
             outb(PIC2_CMD, 0x11);
@@ -67,8 +53,9 @@ impl ChainedPics {
             outb(PIC2_DATA, 0x01);
             iowait();
 
-            outb(PIC1_DATA, 0x00); // Unmask all
-            outb(PIC2_DATA, 0x00);
+            // Unmask IRQ0 timer, IRQ1 keyboard, and IRQ2 cascade only.
+            outb(PIC1_DATA, 0xF8);
+            outb(PIC2_DATA, 0xFF);
         }
     }
 

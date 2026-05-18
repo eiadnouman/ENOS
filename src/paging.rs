@@ -4,33 +4,50 @@ use core::arch::asm;
 const PAGE_PRESENT: u32 = 0x01;
 const PAGE_RW: u32 = 0x02;
 const PAGE_USER: u32 = 0x04;
+const ENTRIES_PER_TABLE: usize = 1024;
+
+pub const USER_SPACE_START: u32 = 0x0040_0000;
+pub const USER_SPACE_END: u32 = 0x0080_0000;
+pub const USER_STACK_TOP: u32 = USER_SPACE_END;
 
 #[repr(C, align(4096))]
 pub struct PageDirectory {
-    entries: [u32; 1024],
+    entries: [u32; ENTRIES_PER_TABLE],
 }
 
 #[repr(C, align(4096))]
 pub struct PageTable {
-    entries: [u32; 1024],
+    entries: [u32; ENTRIES_PER_TABLE],
 }
 
-static mut PAGE_DIRECTORY: PageDirectory = PageDirectory { entries: [0; 1024] };
-static mut PAGE_TABLE_0: PageTable = PageTable { entries: [0; 1024] };
-static mut PAGE_TABLE_1: PageTable = PageTable { entries: [0; 1024] };
+static mut PAGE_DIRECTORY: PageDirectory = PageDirectory { entries: [0; ENTRIES_PER_TABLE] };
+static mut PAGE_TABLE_0: PageTable = PageTable { entries: [0; ENTRIES_PER_TABLE] };
+static mut PAGE_TABLE_1: PageTable = PageTable { entries: [0; ENTRIES_PER_TABLE] };
+
+pub fn user_range_contains(ptr: u32, len: usize) -> bool {
+    if len == 0 {
+        return false;
+    }
+
+    let Some(end) = ptr.checked_add(len as u32) else {
+        return false;
+    };
+
+    ptr >= USER_SPACE_START && end <= USER_SPACE_END && end > ptr
+}
 
 pub fn init() {
     unsafe {
         // Prepare Page Table 0 (maps 0x0 to 0x3FFFFF - first 4MB)
-        for i in 0..1024 {
+        for i in 0..ENTRIES_PER_TABLE {
             let phys_addr = (i * 4096) as u32;
             // Kernel space: supervisor-only mappings.
             PAGE_TABLE_0.entries[i] = phys_addr | PAGE_PRESENT | PAGE_RW;
         }
 
         // Prepare Page Table 1 (maps 0x400000 to 0x7FFFFF - second 4MB)
-        for i in 0..1024 {
-            let phys_addr = 0x400000 + (i * 4096) as u32;
+        for i in 0..ENTRIES_PER_TABLE {
+            let phys_addr = USER_SPACE_START + (i * 4096) as u32;
             // User space: explicitly user-accessible.
             PAGE_TABLE_1.entries[i] = phys_addr | PAGE_PRESENT | PAGE_RW | PAGE_USER;
         }

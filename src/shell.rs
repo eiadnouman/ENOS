@@ -5,6 +5,47 @@ use spin::Mutex;
 
 const MAX_INPUT_LEN: usize = 256;
 const MAX_HISTORY_ENTRIES: usize = 64;
+const SCANCODE_QUEUE_CAPACITY: usize = 128;
+
+struct ScancodeQueue {
+    data: [u8; SCANCODE_QUEUE_CAPACITY],
+    head: usize,
+    tail: usize,
+    len: usize,
+}
+
+impl ScancodeQueue {
+    const fn new() -> Self {
+        ScancodeQueue {
+            data: [0; SCANCODE_QUEUE_CAPACITY],
+            head: 0,
+            tail: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, scancode: u8) -> bool {
+        if self.len == SCANCODE_QUEUE_CAPACITY {
+            return false;
+        }
+
+        self.data[self.tail] = scancode;
+        self.tail = (self.tail + 1) % SCANCODE_QUEUE_CAPACITY;
+        self.len += 1;
+        true
+    }
+
+    fn pop(&mut self) -> Option<u8> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let scancode = self.data[self.head];
+        self.head = (self.head + 1) % SCANCODE_QUEUE_CAPACITY;
+        self.len -= 1;
+        Some(scancode)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct KeyboardState {
@@ -152,6 +193,7 @@ lazy_static! {
     });
     static ref HISTORY: Mutex<HistoryState> = Mutex::new(HistoryState::new());
     static ref SESSION: Mutex<SessionState> = Mutex::new(SessionState::new());
+    static ref SCANCODE_QUEUE: Mutex<ScancodeQueue> = Mutex::new(ScancodeQueue::new());
 }
 
 pub fn init() {
@@ -216,6 +258,28 @@ fn history_down() {
     let next = HISTORY.lock().next();
     if let Some(entry) = next {
         replace_input_line(&entry);
+    }
+}
+
+pub fn enqueue_scancode_from_irq(scancode: u8) {
+    let _ = SCANCODE_QUEUE.lock().push(scancode);
+}
+
+pub fn poll_input() {
+    let mut processed = 0usize;
+
+    while processed < SCANCODE_QUEUE_CAPACITY {
+        let scancode = {
+            let mut queue = SCANCODE_QUEUE.lock();
+            queue.pop()
+        };
+
+        let Some(scancode) = scancode else {
+            break;
+        };
+
+        process_scancode(scancode);
+        processed += 1;
     }
 }
 
