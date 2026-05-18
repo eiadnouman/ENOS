@@ -122,6 +122,43 @@ impl Writer {
                 _ => self.write_byte(0xfe), // ■
             }
         }
+        self.update_cursor();
+    }
+
+    pub fn update_cursor(&self) {
+        let pos = (BUFFER_HEIGHT - 1) * BUFFER_WIDTH + self.column_position;
+        let pos_u16 = pos as u16;
+        
+        unsafe {
+            // Tell VGA board we are setting the high cursor byte
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") 0x3D4_u16,
+                in("al") 0x0E_u8,
+                options(nomem, nostack, preserves_flags)
+            );
+            // Send the high cursor byte
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") 0x3D5_u16,
+                in("al") (pos_u16 >> 8) as u8,
+                options(nomem, nostack, preserves_flags)
+            );
+            // Tell VGA board we are setting the low cursor byte
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") 0x3D4_u16,
+                in("al") 0x0F_u8,
+                options(nomem, nostack, preserves_flags)
+            );
+            // Send the low cursor byte
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") 0x3D5_u16,
+                in("al") (pos_u16 & 0xFF) as u8,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
     }
 }
 
@@ -146,6 +183,7 @@ pub fn clear_screen() {
         writer.clear_row(row);
     }
     writer.column_position = 0;
+    writer.update_cursor();
 }
 
 #[macro_export]
