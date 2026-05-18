@@ -1,0 +1,32 @@
+{
+    // ── Rust Analyzer ──────────────────────────────────────────────────────────
+    // Tell rust-analyzer to use the same nightly toolchain used by cargo build.
+    "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
+    "rust-analyzer.cargo.extraArgs": ["+nightly"],
+
+    // Pass the same unstable flags that .cargo/config.toml sets, so
+    // rust-analyzer can resolve core / alloc / compiler_builtins.
+    "rust-analyzer.cargo.extraEnv": {},
+    "rust-analyzer.cargo.target": "i686-enos.json",
+    "rust-analyzer.cargo.features": "all",
+
+    // build-std is an unstable feature; pass it via the check command.
+    "rust-analyzer.check.overrideCommand": [
+        "cargo",
+        "+nightly",
+        "check",
+        "--message-format=json",
+        "-Z", "build-std=core,compiler_builtins,alloc",
+        "-Z", "json-target-spec",
+        "--target", "i686-enos.json"
+    ],
+
+    // Ensure rust-analyzer uses nightly for proc-macro expansion too.
+    "rust-analyzer.rustc.source": "discover",
+
+    // ── Editor ─────────────────────────────────────────────────────────────────
+    // Suppress the old C/C++ gcc task that was left over from the C prototype.
+    "[c]": {
+        "editor.defaultFormatter": null
+    }
+}
