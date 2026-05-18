@@ -171,3 +171,32 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_frame: &mut crate::idt::In
 
     crate::pic::ack(33);
 }
+
+/// Run a closure with hardware interrupts disabled, then restore the previous
+/// interrupt-enable state (from EFLAGS.IF). This prevents deadlocks when a 
+/// thread acquires a lock that an interrupt handler might also need.
+#[inline]
+pub fn without_interrupts<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let flags: u32;
+    unsafe {
+        // Save EFLAGS and disable interrupts atomically.
+        core::arch::asm!(
+            "pushfd",
+            "pop {0}",
+            "cli",
+            out(reg) flags,
+            options(nomem, preserves_flags)
+        );
+    }
+    let result = f();
+    unsafe {
+        // Restore the interrupt-enable bit from the saved flags.
+        if flags & 0x0200 != 0 {
+            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+        }
+    }
+    result
+}
